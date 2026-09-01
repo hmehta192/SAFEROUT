@@ -1,0 +1,157 @@
+{
+  "app_name": "SafeRoute",
+  "personality": "7 Dark-First Utility DARK",
+  "personality_one_liner": "A high-contrast, tactical command center prioritizing glanceability, live metrics, and robust utility for drivers and parents.",
+  "color": {
+    "surface": "#0F1115",
+    "onSurface": "#FFFFFF",
+    "surfaceSecondary": "#1C1F26",
+    "onSurfaceSecondary": "#A1A7B3",
+    "surfaceTertiary": "#282C35",
+    "onSurfaceTertiary": "#D1D6E0",
+    "surfaceInverse": "#FFFFFF",
+    "onSurfaceInverse": "#0F1115",
+    "brand": "#FFAB00",
+    "brandPrimary": "#FFAB00",
+    "onBrandPrimary": "#000000",
+    "brandSecondary": "#CC8900",
+    "onBrandSecondary": "#000000",
+    "brandTertiary": "#332200",
+    "onBrandTertiary": "#FFAB00",
+    "success": "#00E676",
+    "onSuccess": "#000000",
+    "warning": "#FFEA00",
+    "onWarning": "#000000",
+    "error": "#FF3D00",
+    "onError": "#FFFFFF",
+    "info": "#29B6F6",
+    "onInfo": "#000000",
+    "border": "#282C35",
+    "borderStrong": "#454B59",
+    "divider": "#1C1F26"
+  },
+  "typography": {
+    "displayFontFamily": "Rajdhani",
+    "textFontFamily": "DM Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Dense but clear. Use md (12) for inner padding, lg (16) for outer screen margins. Sticky action containers must have breathing room above the safe area.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "0",
+  "navigation": "stack_only",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": "false",
+    "do's": [
+      "Use solid surfaceSecondary and surfaceTertiary for elevation instead of blur.",
+      "Keep the interface sharp and performant for budget devices."
+    ],
+    "dont's": [
+      "No blur effects, no glass tabs, no translucent sheets. Clarity beats aesthetic."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "solid surfaceSecondary",
+      "android": "solid surfaceSecondary",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "solid colors",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Auth (Login)",
+      "purpose": "Simple Phone/OTP login routing users to their respective role dashboards.",
+      "states": {
+        "loading": "Spinner over disabled input",
+        "empty": "N/A",
+        "error": "Inline red text below input with retry"
+      },
+      "layout": "Minimalist single-column centered layout. Huge numeric keypad integration, giant 'Send OTP' brandPrimary button sticky at the bottom."
+    },
+    {
+      "name": "Driver Dashboard",
+      "purpose": "Command center for the driver to start/end trips, manage batches, and mark absentees.",
+      "states": {
+        "loading": "Skeleton rows for batches",
+        "empty": "Illustration of an idle bus with 'No active batches assigned today'.",
+        "error": "Full screen error with 'Failed to load route data' and giant Retry button."
+      },
+      "layout": "Top half: Massive 'START TRIP' or 'END TRIP' button (color-coded, fills width). Bottom half: Stacked list of batches and students. Each student row has a quick-action toggle for 'Mark Absent'."
+    },
+    {
+      "name": "Parent Live Tracking",
+      "purpose": "Live map view showing vehicle marker and ETA.",
+      "states": {
+        "loading": "Pulsing map placeholder",
+        "empty": "No active trip screen with 'Bus hasn't started yet'.",
+        "error": "Failed to connect to GPS."
+      },
+      "layout": "Top 60%: Full-bleed map view with moving bus marker. Bottom 40%: Persistent bottom sheet (surfaceSecondary) showing Trip Status timeline (Started, On Way, Reached), ETA in large display font, and latest alerts."
+    },
+    {
+      "name": "Admin Dashboard",
+      "purpose": "High-level overview of all active trips, subscriptions, and user management.",
+      "states": {
+        "loading": "Skeleton grids",
+        "empty": "No active trips right now.",
+        "error": "Failed to sync admin data."
+      },
+      "layout": "Grid-based utility layout. Top row: Live active trip counters (large metrics). Scrollable lists for drivers, parents, and subscription tracking below. Use segmented controls for fast switching between entities."
+    }
+  ],
+  "images": {
+    "hero_login": {
+      "url": "https://images.unsplash.com/photo-1527058918112-6e17a8213943?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzV8MHwxfHNlYXJjaHwxfHxzY2hvb2wlMjBidXMlMjB0cmFja2luZyUyMGFwcCUyMGhlcm8lMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc4ODI3NTM1M3ww&ixlib=rb-4.1.0&q=85",
+      "alt": "school bus on pathway"
+    },
+    "map_placeholder": {
+      "url": "https://images.unsplash.com/photo-1506426305266-2b7e740fd828?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNDR8MHwxfHNlYXJjaHwxfHxlbXB0eSUyMHN0cmVldCUyMG1hcCUyMGRhcmslMjBtb2RlfGVufDB8fHx8MTc4ODI3NTM1M3ww&ixlib=rb-4.1.0&q=85",
+      "alt": "photography of road"
+    },
+    "driver_avatar": {
+      "url": "https://images.unsplash.com/photo-1740252117044-2af197eea287?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NjV8MHwxfHNlYXJjaHwxfHxkcml2ZXIlMjBwcm9maWxlJTIwYXZhdGFyfGVufDB8fHx8MTc4ODI3NTM1M3ww&ixlib=rb-4.1.0&q=85",
+      "alt": "A cartoon character wearing a blue shirt and a blue hat"
+    }
+  },
+  "haptics": {
+    "primary_button": "impactMedium",
+    "trip_start_end": "impactHeavy",
+    "mark_absent_toggle": "impactLight",
+    "tab_switch": "selection"
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the Dark-First Utility DARK design principles. Keep contrast high, typography large and glanceable.",
+    "The target demographic includes small city drivers; ensure tap targets are HUGE (minimum 56pt) and text is highly legible (DM Sans + Rajdhani for metrics).",
+    "No glassmorphism or blur effects. Use solid surfaceSecondary and surfaceTertiary to maintain high performance on budget Android devices.",
+    "Driver App: Ensure the Start/End trip buttons are always visible, sticky at the bottom or massive at the top.",
+    "Parent App: The map should take up the majority of the screen, with a clean bottom sheet containing ETA and timeline.",
+    "Admin App: Present metrics using condensed display fonts (Rajdhani) for numerical superiority.",
+    "Implement the 'gradient-to-dark scrim pattern' when rendering text over the hero image on the login screen.",
+    "Ensure all lists have distinct visual hierarchy. A live tracking dashboard is not the place for subtle aesthetics. Make statuses (Active, Delayed, Completed) pop with the designated status colors."
+  ]
+}

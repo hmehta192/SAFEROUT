@@ -1,0 +1,39 @@
+{
+  "summary": "Backend: 19/19 pytest passed across auth, role guards, driver trip lifecycle+alerts, parent trips/alerts/read-all, admin CRUD + subscription. Frontend: login (auto-fill OTP), admin overview + all 6 tabs, driver dashboard rendering, and parent screen with 2-child chips all work. Two frontend defects found: (1) initial 'Missing token' error toast on admin dashboard right after successful login (visible in screenshot alongside 'Welcome, School Admin'), (2) admin Add-Entity Sheet Save button falls outside the 390x844 mobile viewport (not reachable without scroll). Also observed: 401 API calls continue firing after logout because setInterval polling in admin (8s) and parent (5s) is not gated on auth state.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AdminDashboard load()", "issue": "First load() call fires before the JWT token is written to secure storage, producing a 'Missing token' 401 toast that flashes on top of the 'Welcome' toast every login. Race between router.replace and storage.secureSet in useAuth.verifyOtp. Reference: /app/frontend/app/admin/index.tsx:65-69 useEffect(load) and /app/frontend/src/api.ts:14 secureGet.", "testID": "admin-sheet / overview-tab", "priority": "HIGH"},
+      {"component": "Admin Add-Entity Sheet", "issue": "sheet-save-button is rendered outside the 390x844 mobile viewport for the Add Parent/Driver/Student/Batch sheets. Playwright reports 'Element is outside of the viewport'. Sheet body needs to be scrollable or button pinned to a sticky footer. Reference: /app/frontend/app/admin/index.tsx:366 Button testID='sheet-save-button'.", "testID": "sheet-save-button", "priority": "HIGH"},
+      {"component": "AdminDashboard / ParentTracking polling", "issue": "setInterval(load, 8000) in admin and setInterval(loadTrips+loadAlerts, 5000) in parent keep firing after logout, producing hundreds of 401 requests until the screen unmounts. Should also stop polling when auth user becomes null. Reference: /app/frontend/app/admin/index.tsx:66-68 and /app/frontend/app/parent/index.tsx:73-79.", "testID": "-", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "Login -> first authenticated fetch", "issue": "Admin dashboard fires GET /api/admin/overview etc. before Authorization header is populated, causing a spurious 401 and error toast on every login.", "affected_testIDs": ["overview-tab"]}
+    ],
+    "design_issues": [
+      {"screen": "Login", "issues": ["Custom DMSans TTF fonts fail to decode on web ('OTS parsing error: invalid sfntVersion') — falls back to system font. Non-blocking but produces console warnings on every screen."]},
+      {"screen": "Admin sheets", "issues": ["Save CTA not visible without scroll on 390x844."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_saferoute_api.py", "/app/test_reports/pytest/saferoute_results.xml"],
+  "action_items": [
+    "Fix admin login race: either await token persistence before router.replace, or guard AdminDashboard's initial load() until auth user is present (useEffect deps on user?.id).",
+    "Make Sheet content scrollable OR pin the Save button to a fixed footer inside the Sheet so it stays inside the mobile viewport for all Add-Entity forms.",
+    "Gate the polling intervals in AdminDashboard and ParentTracking on !!user to stop 401 storms after logout.",
+    "Verify DMSans TTF asset packaging — served .ttf files fail OTS parsing on web (probably being served with wrong MIME/HTML fallback). Not blocking mobile but noisy on web preview."
+  ],
+  "critical_code_review_comments": [
+    "api.ts silently drops the Authorization header when secureGet returns empty; consider throwing/redirecting instead of hitting endpoint that will 401.",
+    "server.py move_student endpoint (line 328) uses `MoveBody` for driver-move but same body for admin PATCH /admin/students/{id} — OK but consider explicit rename.",
+    "server.py depends on @app.on_event('startup') which is deprecated in FastAPI in favor of lifespan — non-blocking.",
+    "AdminDashboard.load() runs every 8s even when a Sheet form is open — could clobber form state if a re-render happens; low risk but worth noting."
+  ],
+  "updated_files": ["/app/backend/tests/test_saferoute_api.py"],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "~80% (login, role routing, admin tabs, driver dashboard render, parent chips & alerts all OK; add-entity save unreachable in viewport and post-login token race)"},
+  "seed_data_creation": "Backend test suite creates and cleans up TEST_ prefixed drivers/parents/batches/students. Frontend test created one TEST_UI_Parent (not saved because Save button was off-screen).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend is stable. Re-run /app/backend/tests/test_saferoute_api.py after any code change. For frontend, focus on: (1) admin login should NOT show 'Missing token' toast, (2) all admin Add sheets — Save button must be tappable inside 390x844 viewport, (3) after tapping Logout no further /api/admin or /api/parent 401 requests should be produced. Seeded phones: Admin +919000000001, Driver +919000000002, Parent +919000000003 (2 kids), Parent +919000000004 (1 kid). dev_otp is returned by POST /api/auth/send-otp and auto-filled on the login screen.",
+  "rca_of_issue": "Missing-token toast: useAuth.verifyOtp likely calls setUser + storage.secureSet + router.replace in parallel or without awaiting the storage write; AdminDashboard mounts, useEffect fires load() which calls api.adminOverview() → api.ts calls storage.secureGet(TOKEN_KEY, '') and gets '' → request is sent without Authorization → 401 → toast. Fix by (a) awaiting storage.secureSet inside verifyOtp before navigating, (b) or having the API layer wait/refetch when token missing, (c) gating load() until user has non-null token in context. Sheet save button: absolute positioning/height of Sheet is capping content and Button overflows below viewport bottom — reproduce by opening any Add-* sheet on 390x844 and inspecting; wrap Sheet body in ScrollView or move Save into a sticky footer."
+}
