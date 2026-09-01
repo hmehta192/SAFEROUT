@@ -1,0 +1,59 @@
+{
+  "summary": "Iteration-2 backend + UI review. Added /app/backend/tests/test_saferoute_iter2.py (14 new tests: start-requires-batch, GPS location auto-status, driver unavailable full flow, parent live-info + isolation, admin alerts feed + role guard + read-all). Result: iter2 = 13 passed / 1 skipped (parent-isolation skipped because no batch remained exclusive to Priya after iter1 moves). Combined with existing regression suite: 28 passed / 2 skipped / 3 failed. The 3 failures in the iter-1 suite are stale-data artifacts (a leftover TEST_Batch and previously moved students left batches[0] empty) — not code bugs. All iteration-2 features verified end-to-end: (a) trip start requires batch_id (422 empty, 404 unknown), (b) POST /driver/trips/location auto-flips status to 'on_the_way', (c) POST /driver/batches/{id}/unavailable rejects empty reason (400), ends active trip, and creates driver_unavailable alerts for BOTH parents of batch students AND all admins (verified via GET /admin/alerts and GET /parent/alerts), (d) starting a trip clears the unavailable flag, (e) GET /parent/trips now returns distance_km, eta_min, traffic (Light/Moderate/Heavy), batch_unavailable, unavailable_reason, driver_id, batch_id, (f) admin-alerts endpoint 403 for parent role. UI verified on mobile viewport 390x844: driver dashboard shows batch cards (testID batch-card-{id}), START button, 'I can't drive this batch' (mark-unavailable-button) opens unavailable-sheet with 4 quick-reason chips and submit-unavailable-button — full flow succeeds and toast 'Sent — parents & admin notified' appears, plus 'You marked this unavailable' label on the affected batch. Admin notification bell (admin-alerts-button) opens admin-alerts-sheet with 22 alerts including 'Driver Unavailable — Rajesh Kumar unavailable for Morning Pickup - Zone A. Reason: Vehicle breakdown'. Iteration-1 UI issues (missing-token toast, sheet-save-button off-viewport, polling continues after logout, DMSans font decode warnings) still present — see below.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/driver/batches (state hygiene)", "issue": "Regression suite is not idempotent across runs — leftover TEST_Batch from admin CRUD test and students moved across batches by driver 'move' test leave subsequent runs failing at 'assert len(batches)==2' and 'batches[0].students'. Bug is in tests, not server, but the server does not offer a reset endpoint. Consider adding proper teardown in test_saferoute_api.py (delete TEST_Batch after use and revert 'move student' immediately)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AdminDashboard load()", "issue": "First load() call still fires before the JWT is written to secure storage on first login, producing a brief 'Missing token' 401. Same race described in iter1. Reference: /app/frontend/app/admin/index.tsx useEffect(load) and /app/frontend/src/api.ts secureGet.", "testID": "overview-tab", "priority": "MEDIUM"},
+      {"component": "Admin Add-Entity Sheet", "issue": "sheet-save-button remains outside 390x844 viewport in Add Parent/Driver/Student/Batch — sheet body needs scrollable content or sticky footer.", "testID": "sheet-save-button", "priority": "HIGH"},
+      {"component": "AdminDashboard / ParentTracking polling", "issue": "setInterval(load, 8000) and (loadTrips+loadAlerts, 5000) keep firing after logout → 401 storm until unmount. Should gate on !!user.", "testID": "-", "priority": "MEDIUM"},
+      {"component": "start-trip-button disabled state", "issue": "Pressable does not expose aria-disabled on web when a batch is not yet selected — visual state may indicate disabled but screen-readers/testing frameworks can't detect. Add accessibilityState={{disabled}} on Pressable so aria-disabled is emitted. Reference: /app/frontend/app/driver/index.tsx:346", "testID": "start-trip-button", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Login -> first authenticated fetch", "issue": "Admin overview 401 flashes right after OTP verify (token not yet persisted).", "affected_testIDs": ["overview-tab"]}
+    ],
+    "design_issues": [
+      {"screen": "Login", "issues": ["DMSans TTF assets still fail OTS parsing on web ('invalid sfntVersion: 168430090' == 0x0A0A0A0A → the served file is likely an HTML/text fallback, not a real TTF). Reproduces on every screen; web font falls back to system. Investigate metro asset serving for /assets/?unstable_path=./assets/fonts/DMSans-*.ttf."]},
+      {"screen": "Admin sheets", "issues": ["Save CTA not visible without scroll on 390x844."]}
+    ],
+    "react_native_issues": [
+      {"component": "useNativeDriver (Animated)", "issue": "Console warning: 'useNativeDriver is not supported because the native animated module is missing. Falling back to JS-based animation.' Expected on web preview but consider gating useNativeDriver: Platform.OS !== 'web' to silence."},
+      {"component": "props.pointerEvents deprecation", "issue": "Console warning: 'props.pointerEvents is deprecated. Use style.pointerEvents'. Migrate any View pointerEvents prop into style. Search /app/frontend for pointerEvents=."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_saferoute_iter2.py",
+    "/app/backend/tests/test_saferoute_api.py",
+    "/app/test_reports/pytest/saferoute_iter2_results.xml"
+  ],
+  "action_items": [
+    "Nothing blocking on backend — iter2 endpoints all work. Optional: add DELETE /admin/batches/{id} so admin cleanup tests can remove TEST_Batch (currently leaks).",
+    "Make iter-1 regression tests self-cleaning: delete created batch and revert 'move student' at end of each test so consecutive runs stay green.",
+    "Persist token before router.replace in useAuth.verifyOtp (or block the first /api call until user is set) — kills the 'Missing token' 401 flash on login.",
+    "Fix admin Add-Entity Sheet: wrap body in ScrollView OR pin the Save button as a sticky footer — currently unreachable on 390x844.",
+    "Gate setInterval polling in Admin/Parent screens on !!user and clearInterval on unmount to stop the 401 storm after logout.",
+    "Add accessibilityState={{disabled}} to start-trip-button Pressable so screen-readers and Playwright can detect the disabled state before a batch is selected.",
+    "Address DMSans TTF asset serving on web preview (files being returned as HTML → OTS parsing error 'invalid sfntVersion: 168430090'). Non-blocking but noisy.",
+    "Silence useNativeDriver warning on web (Platform.OS check) and migrate props.pointerEvents to style.pointerEvents."
+  ],
+  "critical_code_review_comments": [
+    "server.py end_trip does not clear batch.unavailable — only start_trip does. If a batch is set unavailable and then the driver just wants to log off without restarting, admin/parent alert says 'unavailable' indefinitely. Acceptable, but consider a separate 'clear unavailable' action.",
+    "GET /parent/trips returns entire trip document including internal fields; consider trimming to what UI needs.",
+    "Alerts collection now uses 'user_id' but there is no compound index; polling admin bell every 8s scans 100 docs each time — add index {user_id:1, created_at:-1}.",
+    "server.py still uses deprecated @app.on_event('startup'); migrate to lifespan handler.",
+    "Frontend: EXPO_PUBLIC_BACKEND_URL is read directly in api.ts — good, but consider a fetch wrapper that redirects to login on 401 to avoid the current 401 storm."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_saferoute_iter2.py"
+  ],
+  "success_rate": {"backend": "iter2: 13/14 (1 skipped due to pre-existing mutated state) ; combined regression: 28/33 (2 skipped, 3 stale-data failures — not code bugs)", "frontend": "~85% — driver flows (batch select → start → GPS badge, mark unavailable + reason sheet + submit) verified; admin notifications bell + sheet verified with 22 alerts including driver_unavailable; parent screen renders panel/chips/alerts but live-info + driver-unavailable-banner not re-captured in this run because trip cleanup left no active trip after driver logout — backend layer confirms the data path."},
+  "seed_data_creation": "test_saferoute_iter2.py leaves the DB in a clean state (every test ends its trip). test_saferoute_api still leaks one TEST_Batch (bug in test).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All iteration-2 endpoints are covered by /app/backend/tests/test_saferoute_iter2.py (run with EXPO_PUBLIC_BACKEND_URL exported). If iter-1 tests fail with 'assert len(batches)==2' or empty batches[0].students, that is stale-data pollution — the seed only runs when admin doesn't exist. Iter2 UI testIDs verified: gps-live-badge, batch-card-{id}, start-trip-button, mark-unavailable-button, unavailable-sheet, quick-reason-*, submit-unavailable-button, admin-alerts-button, admin-alerts-sheet, live-info, driver-unavailable-banner, child-chip-{id}, alerts-button, alerts-sheet. To reliably observe parent live-info and driver-unavailable-banner via UI, first seed an active trip on the parent's specific batch (get batch_id via GET /api/parent/children), then POST /api/driver/trips/location, then log the parent in — the parent polls every 5s so wait ~6s after each change.",
+  "rca_of_issue": "Regression failures in test_saferoute_api are RCA'd to test data mutation: TEST_Batch never deleted, and 'move student' test moves batches[0].students[0] and only reverts if the assertion succeeds — after a partial run the DB ends up with a batch containing 3 seeded students and another with 0, causing 'assert len(batches)==2' (extra TEST_Batch) and 'batches[0].students[0]' (empty list) to fail on subsequent runs. Mitigation: (a) always DELETE /admin/batches after tests (endpoint not present today — add it), (b) use pytest fixture with yield/finally to guarantee student revert. No production bug is implied."
+}

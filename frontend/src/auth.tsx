@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { storage } from "@/src/utils/storage";
-import { api, TOKEN_KEY } from "@/src/api";
+import { api, TOKEN_KEY, setAuthToken } from "@/src/api";
 
 type User = {
   id: string;
@@ -28,6 +28,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const token = await storage.secureGet(TOKEN_KEY, "");
       if (token) {
+        setAuthToken(token);
         const me = await api.me();
         setUser(me);
       }
@@ -44,12 +45,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const verifyOtp = useCallback(async (phone: string, otp: string) => {
     const res = await api.verifyOtp(phone, otp);
+    setAuthToken(res.token);
     await storage.secureSet(TOKEN_KEY, res.token);
     setUser(res.user);
     return res.user as User;
   }, []);
 
   const logout = useCallback(async () => {
+    setAuthToken(null);
     await storage.secureRemove(TOKEN_KEY);
     setUser(null);
   }, []);

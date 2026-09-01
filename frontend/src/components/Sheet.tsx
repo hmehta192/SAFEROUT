@@ -17,30 +17,33 @@ export default function Sheet({ visible, onClose, title, children, footer, testI
   const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} testID="sheet-backdrop" />
-      <View testID={testID} style={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]}>
-        <View style={styles.handle} />
-        <View style={styles.header}>
-          <Text style={styles.title}>{title}</Text>
-          <Pressable onPress={onClose} testID="sheet-close-button" hitSlop={12}>
-            <Ionicons name="close" size={24} color={colors.onSurfaceSecondary} />
-          </Pressable>
+      <View style={styles.root}>
+        <Pressable style={styles.backdrop} onPress={onClose} testID="sheet-backdrop" />
+        <View testID={testID} style={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]}>
+          <View style={styles.handle} />
+          <View style={styles.header}>
+            <Text style={styles.title}>{title}</Text>
+            <Pressable onPress={onClose} testID="sheet-close-button" hitSlop={12}>
+              <Ionicons name="close" size={24} color={colors.onSurfaceSecondary} />
+            </Pressable>
+          </View>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: spacing.md }}
+          >
+            {children}
+          </ScrollView>
+          {footer ? <View style={styles.footer}>{footer}</View> : null}
         </View>
-        <ScrollView
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: spacing.md }}
-        >
-          {children}
-        </ScrollView>
-        {footer ? <View style={styles.footer}>{footer}</View> : null}
       </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.65)" },
+  root: { flex: 1, justifyContent: "flex-end" },
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.65)" },
   sheet: {
     backgroundColor: colors.surfaceSecondary,
     borderTopLeftRadius: radius.lg,

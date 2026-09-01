@@ -4,6 +4,12 @@ const BASE = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 
 export const TOKEN_KEY = "saferoute_token";
 
+// In-memory token removes any storage-read race right after login.
+let authToken: string | null = null;
+export function setAuthToken(t: string | null) {
+  authToken = t;
+}
+
 async function request<T = any>(
   path: string,
   options: { method?: string; body?: any; auth?: boolean } = {}
@@ -11,7 +17,7 @@ async function request<T = any>(
   const { method = "GET", body, auth = true } = options;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (auth) {
-    const token = await storage.secureGet(TOKEN_KEY, "");
+    const token = authToken || (await storage.secureGet(TOKEN_KEY, ""));
     if (token) headers["Authorization"] = `Bearer ${token}`;
   }
   const res = await fetch(`${BASE}${path}`, {
@@ -42,6 +48,8 @@ export const api = {
   updateLocation: (lat: number, lng: number) =>
     request("/driver/trips/location", { method: "POST", body: { lat, lng } }),
   endTrip: () => request("/driver/trips/end", { method: "POST" }),
+  driverUnavailable: (batchId: string, reason: string) =>
+    request(`/driver/batches/${batchId}/unavailable`, { method: "POST", body: { reason } }),
   markAbsent: (studentId: string, absent: boolean) =>
     request(`/driver/students/${studentId}/absent`, { method: "POST", body: { absent } }),
   moveStudent: (studentId: string, batch_id: string) =>
@@ -55,6 +63,8 @@ export const api = {
 
   // admin
   adminOverview: () => request("/admin/overview"),
+  adminAlerts: () => request("/admin/alerts"),
+  adminReadAll: () => request("/admin/alerts/read-all", { method: "POST" }),
   adminDrivers: () => request("/admin/drivers"),
   addDriver: (b: any) => request("/admin/drivers", { method: "POST", body: b }),
   deleteDriver: (id: string) => request(`/admin/drivers/${id}`, { method: "DELETE" }),

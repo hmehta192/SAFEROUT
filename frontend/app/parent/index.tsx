@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { useToast } from "@/src/components/Toast";
@@ -22,9 +23,14 @@ type TripInfo = {
   student_name: string;
   absent_today: boolean;
   batch_name: string;
+  batch_unavailable: boolean;
+  unavailable_reason: string;
   driver_name: string;
   vehicle_number: string;
   trip: Trip;
+  distance_km: number | null;
+  eta_min: number | null;
+  traffic: string | null;
 };
 
 type Alert = { id: string; type: string; title: string; message: string; created_at: string; read: boolean };
@@ -40,6 +46,12 @@ export default function ParentTracking() {
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuth();
   const toast = useToast();
+  const router = useRouter();
+
+  const doLogout = async () => {
+    await logout();
+    router.replace("/login");
+  };
 
   const [trips, setTrips] = useState<TripInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -130,7 +142,7 @@ export default function ParentTracking() {
                 </View>
               )}
             </Pressable>
-            <Pressable testID="logout-button" style={styles.iconBtn} onPress={logout}>
+            <Pressable testID="logout-button" style={styles.iconBtn} onPress={doLogout}>
               <Ionicons name="log-out-outline" size={20} color={colors.onSurface} />
             </Pressable>
           </View>
@@ -181,6 +193,40 @@ export default function ParentTracking() {
             <View style={styles.absentBanner} testID="absent-banner">
               <Ionicons name="alert-circle" size={18} color={colors.warning} />
               <Text style={styles.absentBannerText}>Marked absent today</Text>
+            </View>
+          )}
+
+          {current?.batch_unavailable && (
+            <View style={styles.unavailBanner} testID="driver-unavailable-banner">
+              <Ionicons name="warning" size={18} color={colors.error} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.unavailTitle}>Driver unavailable today</Text>
+                {!!current?.unavailable_reason && (
+                  <Text style={styles.unavailReason}>{current.unavailable_reason}</Text>
+                )}
+              </View>
+            </View>
+          )}
+
+          {trip && trip.current_lat != null && (
+            <View style={styles.liveInfoRow} testID="live-info">
+              <View style={styles.liveInfoCard}>
+                <Ionicons name="speedometer-outline" size={18} color={colors.brand} />
+                <Text style={styles.liveInfoValue}>{current?.distance_km ?? "--"} km</Text>
+                <Text style={styles.liveInfoLabel}>Distance</Text>
+              </View>
+              <View style={styles.liveInfoCard}>
+                <Ionicons name="time-outline" size={18} color={colors.info} />
+                <Text style={styles.liveInfoValue}>{current?.eta_min ?? "--"} min</Text>
+                <Text style={styles.liveInfoLabel}>Arriving in</Text>
+              </View>
+              <View style={styles.liveInfoCard}>
+                <Ionicons name="car-outline" size={18} color={trafficColor(current?.traffic)} />
+                <Text style={[styles.liveInfoValue, { color: trafficColor(current?.traffic) }]}>
+                  {current?.traffic ?? "--"}
+                </Text>
+                <Text style={styles.liveInfoLabel}>Traffic</Text>
+              </View>
             </View>
           )}
 
@@ -240,9 +286,11 @@ export default function ParentTracking() {
 }
 
 const alertColor = (t: string) =>
-  t === "absent" ? colors.error : t === "batch_change" ? colors.warning : colors.info;
+  t === "absent" ? colors.error : t === "batch_change" ? colors.warning : t === "driver_unavailable" ? colors.error : colors.info;
 const alertIcon = (t: string) =>
-  t === "absent" ? "person-remove" : t === "batch_change" ? "swap-horizontal" : "bus";
+  t === "absent" ? "person-remove" : t === "batch_change" ? "swap-horizontal" : t === "driver_unavailable" ? "warning" : "bus";
+const trafficColor = (t?: string | null) =>
+  t === "Heavy" ? colors.error : t === "Moderate" ? colors.warning : colors.success;
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
@@ -338,6 +386,32 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   absentBannerText: { fontFamily: fonts.textMedium, fontSize: 13, color: colors.warning },
+
+  unavailBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: "rgba(255,61,0,0.14)",
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  unavailTitle: { fontFamily: fonts.textBold, fontSize: 14, color: colors.error },
+  unavailReason: { fontFamily: fonts.text, fontSize: 13, color: colors.onSurfaceSecondary, marginTop: 2 },
+
+  liveInfoRow: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.lg },
+  liveInfoCard: {
+    flex: 1,
+    backgroundColor: colors.surfaceTertiary,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    alignItems: "center",
+    gap: 2,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  liveInfoValue: { fontFamily: fonts.displayBold, fontSize: 20, color: colors.onSurface },
+  liveInfoLabel: { fontFamily: fonts.text, fontSize: 11, color: colors.onSurfaceSecondary },
 
   timeline: { marginTop: spacing.sm },
   step: { flexDirection: "row", gap: spacing.md },

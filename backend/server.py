@@ -6,6 +6,8 @@ import os
 import logging
 import random
 import uuid
+import math
+import time
 import jwt
 from pathlib import Path
 from pydantic import BaseModel
@@ -106,16 +108,16 @@ class StudentBody(BaseModel):
     class_grade: Optional[str] = ""
     parent_id: str
     batch_id: str
-    plan: Optional[str] = "monthly"  # monthly | annual
+    plan: Optional[str] = "monthly"
 
 
 class SubscriptionBody(BaseModel):
-    plan: str  # monthly | annual
-    status: str  # active | expired
+    plan: str
+    status: str
 
 
 class StatusBody(BaseModel):
-    status: str  # on_the_way | reached
+    status: str
 
 
 class LocationBody(BaseModel):
@@ -135,7 +137,14 @@ class StartTripBody(BaseModel):
     batch_id: str
 
 
+class UnavailableBody(BaseModel):
+    reason: str
+
+
 PLAN_PRICING = {"monthly": 800, "annual": 8000}
+# Default destination (school) coordinates used for ETA/distance demo.
+SCHOOL_LAT = 12.9800
+SCHOOL_LNG = 77.6100
 
 
 def build_subscription(plan: str):
@@ -150,10 +159,35 @@ def build_subscription(plan: str):
     }
 
 
-async def create_alert(parent_id: str, atype: str, title: str, message: str):
+def haversine_km(lat1, lon1, lat2, lon2):
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def traffic_eta(distance_km: float):
+    # Pseudo traffic that rotates every 20s so parents see auto-updates.
+    idx = int(time.time() // 20) % 3
+    labels = ["Light", "Moderate", "Heavy"]
+    speeds = [32, 20, 12]  # km/h
+    label = labels[idx]
+    speed = speeds[idx]
+    eta = max(1, round((distance_km / speed) * 60))
+    return label, eta
+
+
+async def admin_ids():
+    admins = await db.users.find({"role": "admin", "deleted_at": None}, {"_id": 0, "id": 1}).to_list(100)
+    return [a["id"] for a in admins]
+
+
+async def create_alert(user_id: str, atype: str, title: str, message: str):
     doc = {
         "id": new_id(),
-        "parent_id": parent_id,
+        "user_id": user_id,
         "type": atype,
         "title": title,
         "message": message,
@@ -162,6 +196,14 @@ async def create_alert(parent_id: str, atype: str, title: str, message: str):
         "deleted_at": None,
     }
     await db.alerts.insert_one(doc)
+
+
+async def notify(recipient_ids, atype: str, title: str, message: str):
+    seen = set()
+    for rid in recipient_ids:
+        if rid and rid not in seen:
+            seen.add(rid)
+            await create_alert(rid, atype, title, message)
 
 
 def student_public(s: dict) -> dict:
@@ -195,7 +237,6 @@ async def send_otp(body: SendOtpBody):
         upsert=True,
     )
     logger.info(f"OTP for {phone}: {otp}")
-    # Simulated OTP delivery: returned in response for preview/testing.
     return {"sent": True, "dev_otp": otp, "role": user["role"]}
 
 
@@ -238,6 +279,11 @@ async def driver_active_trip(user: dict = Depends(require_role("driver"))):
     return trip
 
 
+async def parents_of_batch(batch_id: str):
+    students = await db.students.find({"batch_id": batch_id, "deleted_at": None}).to_list(200)
+    return students
+
+
 @api_router.post("/driver/trips/start")
 async def start_trip(body: StartTripBody, user: dict = Depends(require_role("driver"))):
     existing = await db.trips.find_one({"driver_id": user["id"], "status": {"$ne": "ended"}})
@@ -246,6 +292,8 @@ async def start_trip(body: StartTripBody, user: dict = Depends(require_role("dri
     batch = await db.batches.find_one({"id": body.batch_id, "deleted_at": None}, {"_id": 0})
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
+    # Starting a trip clears any 'unavailable' flag on the batch.
+    await db.batches.update_one({"id": body.batch_id}, {"$set": {"unavailable": False, "unavailable_reason": ""}})
     trip = {
         "id": new_id(),
         "driver_id": user["id"],
@@ -260,10 +308,12 @@ async def start_trip(body: StartTripBody, user: dict = Depends(require_role("dri
     }
     await db.trips.insert_one(trip)
     trip.pop("_id", None)
-    students = await db.students.find({"batch_id": body.batch_id, "deleted_at": None}).to_list(200)
+    students = await parents_of_batch(body.batch_id)
     for s in students:
         await create_alert(s["parent_id"], "trip_status", "Trip Started",
                            f"The bus for {s['name']} has started the trip.")
+    await notify(await admin_ids(), "trip_status", "Trip Started",
+                 f"{user['name']} started '{batch['name']}'.")
     return trip
 
 
@@ -276,10 +326,11 @@ async def update_status(body: StatusBody, user: dict = Depends(require_role("dri
         raise HTTPException(status_code=404, detail="No active trip")
     await db.trips.update_one({"id": trip["id"]}, {"$set": {"status": body.status, "updated_at": now_iso()}})
     label = "On the Way" if body.status == "on_the_way" else "Reached"
-    students = await db.students.find({"batch_id": trip["batch_id"], "deleted_at": None}).to_list(200)
+    students = await parents_of_batch(trip["batch_id"])
     for s in students:
         await create_alert(s["parent_id"], "trip_status", label,
                            f"The bus for {s['name']} status: {label}.")
+    await notify(await admin_ids(), "trip_status", label, f"{trip['batch_name']}: {label}.")
     updated = await db.trips.find_one({"id": trip["id"]}, {"_id": 0})
     return updated
 
@@ -302,10 +353,33 @@ async def end_trip(user: dict = Depends(require_role("driver"))):
     if not trip:
         raise HTTPException(status_code=404, detail="No active trip")
     await db.trips.update_one({"id": trip["id"]}, {"$set": {"status": "ended", "ended_at": now_iso(), "updated_at": now_iso()}})
-    students = await db.students.find({"batch_id": trip["batch_id"], "deleted_at": None}).to_list(200)
+    students = await parents_of_batch(trip["batch_id"])
     for s in students:
         await create_alert(s["parent_id"], "trip_status", "Trip Ended",
                            f"The trip for {s['name']} has ended.")
+    await notify(await admin_ids(), "trip_status", "Trip Ended", f"{trip['batch_name']} trip ended.")
+    return {"ok": True}
+
+
+@api_router.post("/driver/batches/{batch_id}/unavailable")
+async def driver_unavailable(batch_id: str, body: UnavailableBody, user: dict = Depends(require_role("driver"))):
+    reason = body.reason.strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Please enter a reason")
+    batch = await db.batches.find_one({"id": batch_id, "driver_id": user["id"], "deleted_at": None})
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    await db.batches.update_one({"id": batch_id}, {"$set": {"unavailable": True, "unavailable_reason": reason}})
+    # End any active trip on this batch.
+    active = await db.trips.find_one({"batch_id": batch_id, "status": {"$ne": "ended"}})
+    if active:
+        await db.trips.update_one({"id": active["id"]}, {"$set": {"status": "ended", "ended_at": now_iso(), "updated_at": now_iso()}})
+    students = await parents_of_batch(batch_id)
+    for s in students:
+        await create_alert(s["parent_id"], "driver_unavailable", "Driver Unavailable",
+                           f"Driver {user['name']} is unavailable for {batch['name']}. Reason: {reason}")
+    await notify(await admin_ids(), "driver_unavailable", "Driver Unavailable",
+                 f"{user['name']} unavailable for '{batch['name']}'. Reason: {reason}")
     return {"ok": True}
 
 
@@ -318,9 +392,13 @@ async def mark_absent(student_id: str, body: AbsentBody, user: dict = Depends(re
     if body.absent:
         await create_alert(student["parent_id"], "absent", "Marked Absent",
                           f"{student['name']} has been marked absent for today's trip.")
+        await notify(await admin_ids(), "absent", "Student Absent",
+                     f"{student['name']} marked absent by {user['name']}.")
     else:
         await create_alert(student["parent_id"], "absent", "Marked Present",
                           f"{student['name']} is back on today's trip.")
+        await notify(await admin_ids(), "absent", "Student Present",
+                     f"{student['name']} marked present by {user['name']}.")
     return {"ok": True, "absent_today": body.absent}
 
 
@@ -335,6 +413,8 @@ async def move_student(student_id: str, body: MoveBody, user: dict = Depends(req
     await db.students.update_one({"id": student_id}, {"$set": {"batch_id": body.batch_id}})
     await create_alert(student["parent_id"], "batch_change", "Batch Changed",
                       f"{student['name']} has been moved to {batch['name']}.")
+    await notify(await admin_ids(), "batch_change", "Batch Changed",
+                 f"{student['name']} moved to {batch['name']} by {user['name']}.")
     return {"ok": True}
 
 
@@ -366,33 +446,60 @@ async def parent_trips(user: dict = Depends(require_role("parent"))):
         batch = await db.batches.find_one({"id": s.get("batch_id")}, {"_id": 0})
         driver = await db.users.find_one({"id": batch["driver_id"]}, {"_id": 0}) if batch else None
         trip = None
+        distance_km = None
+        eta_min = None
+        traffic = None
         if batch:
             trip = await db.trips.find_one({"batch_id": batch["id"], "status": {"$ne": "ended"}}, {"_id": 0})
+            if trip and trip.get("current_lat") is not None:
+                dlat = batch.get("school_lat", SCHOOL_LAT)
+                dlng = batch.get("school_lng", SCHOOL_LNG)
+                distance_km = round(haversine_km(trip["current_lat"], trip["current_lng"], dlat, dlng), 1)
+                traffic, eta_min = traffic_eta(distance_km)
         result.append({
             "student_id": s["id"],
             "student_name": s["name"],
             "absent_today": s.get("absent_today", False),
+            "batch_id": batch["id"] if batch else None,
             "batch_name": batch["name"] if batch else None,
+            "batch_unavailable": batch.get("unavailable", False) if batch else False,
+            "unavailable_reason": batch.get("unavailable_reason", "") if batch else "",
+            "driver_id": batch["driver_id"] if batch else None,
             "driver_name": driver["name"] if driver else None,
             "vehicle_number": driver.get("vehicle_number") if driver else None,
             "trip": trip,
+            "distance_km": distance_km,
+            "eta_min": eta_min,
+            "traffic": traffic,
         })
     return result
 
 
 @api_router.get("/parent/alerts")
 async def parent_alerts(user: dict = Depends(require_role("parent"))):
-    alerts = await db.alerts.find({"parent_id": user["id"], "deleted_at": None}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    alerts = await db.alerts.find({"user_id": user["id"], "deleted_at": None}, {"_id": 0}).sort("created_at", -1).to_list(100)
     return alerts
 
 
 @api_router.post("/parent/alerts/read-all")
 async def read_all_alerts(user: dict = Depends(require_role("parent"))):
-    await db.alerts.update_many({"parent_id": user["id"]}, {"$set": {"read": True}})
+    await db.alerts.update_many({"user_id": user["id"]}, {"$set": {"read": True}})
     return {"ok": True}
 
 
 # ----------------------------- Admin -----------------------------
+
+@api_router.get("/admin/alerts")
+async def admin_alerts(user: dict = Depends(require_role("admin"))):
+    alerts = await db.alerts.find({"user_id": user["id"], "deleted_at": None}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return alerts
+
+
+@api_router.post("/admin/alerts/read-all")
+async def admin_read_all(user: dict = Depends(require_role("admin"))):
+    await db.alerts.update_many({"user_id": user["id"]}, {"$set": {"read": True}})
+    return {"ok": True}
+
 
 @api_router.get("/admin/overview")
 async def admin_overview(user: dict = Depends(require_role("admin"))):
@@ -466,6 +573,8 @@ async def add_batch(body: BatchBody, user: dict = Depends(require_role("admin"))
         raise HTTPException(status_code=404, detail="Driver not found")
     doc = {"id": new_id(), "name": body.name, "driver_id": body.driver_id,
            "school_name": body.school_name, "pickup_time": body.pickup_time,
+           "school_lat": SCHOOL_LAT, "school_lng": SCHOOL_LNG,
+           "unavailable": False, "unavailable_reason": "",
            "created_at": now_iso(), "deleted_at": None}
     await db.batches.insert_one(doc)
     doc.pop("_id", None)
@@ -562,9 +671,13 @@ async def seed_data():
 
     batch1 = {"id": new_id(), "name": "Morning Pickup - Zone A", "driver_id": driver["id"],
               "school_name": "Little Angels School", "pickup_time": "07:30 AM",
+              "school_lat": SCHOOL_LAT, "school_lng": SCHOOL_LNG,
+              "unavailable": False, "unavailable_reason": "",
               "created_at": now_iso(), "deleted_at": None}
     batch2 = {"id": new_id(), "name": "Afternoon Drop - Zone A", "driver_id": driver["id"],
               "school_name": "Little Angels School", "pickup_time": "03:30 PM",
+              "school_lat": SCHOOL_LAT, "school_lng": SCHOOL_LNG,
+              "unavailable": False, "unavailable_reason": "",
               "created_at": now_iso(), "deleted_at": None}
     await db.batches.insert_many([batch1, batch2])
 

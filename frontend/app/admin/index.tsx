@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { useToast } from "@/src/components/Toast";
@@ -24,6 +25,12 @@ export default function AdminDashboard() {
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuth();
   const toast = useToast();
+  const router = useRouter();
+
+  const doLogout = async () => {
+    await logout();
+    router.replace("/login");
+  };
 
   const [tab, setTab] = useState("Overview");
   const [loading, setLoading] = useState(true);
@@ -34,6 +41,8 @@ export default function AdminDashboard() {
   const [parents, setParents] = useState<any[]>([]);
   const [students, setStudents] = useState<any[]>([]);
   const [batches, setBatches] = useState<any[]>([]);
+  const [alerts, setAlerts] = useState<any[]>([]);
+  const [showAlerts, setShowAlerts] = useState(false);
 
   const [sheet, setSheet] = useState<null | "driver" | "parent" | "batch" | "student" | "sub">(null);
   const [subTarget, setSubTarget] = useState<any>(null);
@@ -42,18 +51,20 @@ export default function AdminDashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [o, d, p, s, b] = await Promise.all([
+      const [o, d, p, s, b, al] = await Promise.all([
         api.adminOverview(),
         api.adminDrivers(),
         api.adminParents(),
         api.adminStudents(),
         api.adminBatches(),
+        api.adminAlerts(),
       ]);
       setOverview(o);
       setDrivers(d);
       setParents(p);
       setStudents(s);
       setBatches(b);
+      setAlerts(al);
     } catch (e: any) {
       toast.show(e.message, "error");
     } finally {
@@ -124,6 +135,18 @@ export default function AdminDashboard() {
   }
 
   const c = overview?.counts || {};
+  const unreadAlerts = alerts.filter((a) => !a.read).length;
+  const openAlerts = async () => {
+    setShowAlerts(true);
+    try {
+      await api.adminReadAll();
+      setAlerts((prev) => prev.map((a) => ({ ...a, read: true })));
+    } catch {}
+  };
+  const alertColor = (t: string) =>
+    t === "absent" || t === "driver_unavailable" ? colors.error : t === "batch_change" ? colors.warning : colors.info;
+  const alertIcon = (t: string) =>
+    t === "absent" ? "person-remove" : t === "batch_change" ? "swap-horizontal" : t === "driver_unavailable" ? "warning" : "bus";
 
   return (
     <View style={styles.container}>
@@ -133,7 +156,15 @@ export default function AdminDashboard() {
           <Text style={styles.hi}>Admin</Text>
           <Text style={styles.name}>{user?.name}</Text>
         </View>
-        <Pressable testID="logout-button" onPress={logout} style={styles.iconBtn} hitSlop={10}>
+        <Pressable testID="admin-alerts-button" onPress={openAlerts} style={[styles.iconBtn, { marginRight: spacing.sm }]} hitSlop={10}>
+          <Ionicons name="notifications" size={22} color={colors.onSurface} />
+          {unreadAlerts > 0 && (
+            <View style={styles.headerBadge}>
+              <Text style={styles.headerBadgeText}>{unreadAlerts}</Text>
+            </View>
+          )}
+        </Pressable>
+        <Pressable testID="logout-button" onPress={doLogout} style={styles.iconBtn} hitSlop={10}>
           <Ionicons name="log-out-outline" size={22} color={colors.onSurfaceSecondary} />
         </Pressable>
       </View>
@@ -366,6 +397,23 @@ export default function AdminDashboard() {
           </>
         )}
       </Sheet>
+
+      {/* Notifications feed */}
+      <Sheet visible={showAlerts} onClose={() => setShowAlerts(false)} title="Notifications" testID="admin-alerts-sheet">
+        {alerts.length === 0 && <Text style={styles.empty}>No notifications yet.</Text>}
+        {alerts.map((a) => (
+          <View key={a.id} style={styles.alertRow} testID={`admin-alert-${a.id}`}>
+            <View style={[styles.alertIcon, { backgroundColor: alertColor(a.type) + "22" }]}>
+              <Ionicons name={alertIcon(a.type) as any} size={18} color={alertColor(a.type)} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.cardTitle}>{a.title}</Text>
+              <Text style={styles.cardMeta}>{a.message}</Text>
+              <Text style={styles.alertTime}>{new Date(a.created_at).toLocaleString()}</Text>
+            </View>
+          </View>
+        ))}
+      </Sheet>
     </View>
   );
 }
@@ -452,6 +500,22 @@ const styles = StyleSheet.create({
   hi: { fontFamily: fonts.textMedium, fontSize: 12, color: colors.onSurfaceSecondary, letterSpacing: 1, textTransform: "uppercase" },
   name: { fontFamily: fonts.displayBold, fontSize: 24, color: colors.onSurface },
   iconBtn: { padding: spacing.sm, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md },
+  headerBadge: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: colors.error,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  headerBadgeText: { fontFamily: fonts.textBold, fontSize: 10, color: colors.onError },
+  alertRow: { flexDirection: "row", gap: spacing.md, paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.divider },
+  alertIcon: { width: 38, height: 38, borderRadius: radius.md, alignItems: "center", justifyContent: "center" },
+  alertTime: { fontFamily: fonts.text, fontSize: 11, color: colors.onSurfaceSecondary, marginTop: 4, opacity: 0.7 },
 
   tabsWrap: { height: 56, borderBottomWidth: 1, borderBottomColor: colors.divider },
   tabsRow: { paddingHorizontal: spacing.lg, gap: spacing.sm, alignItems: "center" },

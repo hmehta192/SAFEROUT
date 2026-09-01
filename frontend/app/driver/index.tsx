@@ -9,9 +9,11 @@ import {
   ActivityIndicator,
   Platform,
   Linking,
+  TextInput,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import * as Haptics from "expo-haptics";
 import { api } from "@/src/api";
@@ -22,10 +24,19 @@ import Sheet from "@/src/components/Sheet";
 import { colors, fonts, radius, spacing, statusColor, statusLabel } from "@/src/theme";
 
 type Student = { id: string; name: string; class_grade: string; batch_id: string; absent_today: boolean };
-type Batch = { id: string; name: string; school_name: string; pickup_time: string; students: Student[] };
+type Batch = {
+  id: string;
+  name: string;
+  school_name: string;
+  pickup_time: string;
+  unavailable?: boolean;
+  unavailable_reason?: string;
+  students: Student[];
+};
 type Trip = { id: string; batch_id: string; batch_name: string; status: string } | null;
 
-// Base coordinate (used to simulate movement when device GPS is unavailable).
+const CARD_COLORS = ["#FFAB00", "#29B6F6", "#00E676", "#FF7043"];
+
 let simLat = 12.9716;
 let simLng = 77.5946;
 
@@ -33,13 +44,22 @@ export default function DriverDashboard() {
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuth();
   const toast = useToast();
+  const router = useRouter();
+
+  const doLogout = async () => {
+    await logout();
+    router.replace("/login");
+  };
 
   const [batches, setBatches] = useState<Batch[]>([]);
   const [trip, setTrip] = useState<Trip>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [acting, setActing] = useState(false);
+  const [selectedBatch, setSelectedBatch] = useState<string | null>(null);
   const [moveStudent, setMoveStudent] = useState<Student | null>(null);
+  const [unavailFor, setUnavailFor] = useState<Batch | null>(null);
+  const [reason, setReason] = useState("");
   const intervalRef = useRef<any>(null);
 
   const load = useCallback(async () => {
@@ -47,6 +67,7 @@ export default function DriverDashboard() {
       const [b, t] = await Promise.all([api.driverBatches(), api.driverActiveTrip()]);
       setBatches(b);
       setTrip(t);
+      setSelectedBatch((prev) => prev ?? b[0]?.id ?? null);
     } catch (e: any) {
       toast.show(e.message, "error");
     } finally {
@@ -86,7 +107,7 @@ export default function DriverDashboard() {
     } catch {}
   }, []);
 
-  // Start / stop the 10s GPS ping loop based on active trip.
+  // Auto GPS: starts the moment a trip is active, stops when it ends. No extra button.
   useEffect(() => {
     if (trip && trip.status !== "ended") {
       pushLocation();
@@ -117,14 +138,15 @@ export default function DriverDashboard() {
     }
   };
 
-  const startTrip = async (batchId: string) => {
+  const startTrip = async () => {
+    if (!selectedBatch) return toast.show("Tap a batch first", "info");
     setActing(true);
     await ensureLocationPermission();
     try {
-      const t = await api.startTrip(batchId);
+      const t = await api.startTrip(selectedBatch);
       setTrip(t);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      toast.show("Trip started — parents notified", "success");
+      toast.show("Trip started — GPS is live, parents notified", "success");
     } catch (e: any) {
       toast.show(e.message, "error");
     } finally {
@@ -159,6 +181,24 @@ export default function DriverDashboard() {
     }
   };
 
+  const submitUnavailable = async () => {
+    if (!unavailFor) return;
+    if (reason.trim().length < 3) return toast.show("Please type a short reason", "error");
+    setActing(true);
+    try {
+      await api.driverUnavailable(unavailFor.id, reason.trim());
+      toast.show("Sent — parents & admin notified", "success");
+      setUnavailFor(null);
+      setReason("");
+      setTrip(null);
+      load();
+    } catch (e: any) {
+      toast.show(e.message, "error");
+    } finally {
+      setActing(false);
+    }
+  };
+
   const toggleAbsent = async (s: Student) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     try {
@@ -180,14 +220,15 @@ export default function DriverDashboard() {
     try {
       await api.moveStudent(moveStudent.id, batchId);
       setMoveStudent(null);
-      toast.show("Student moved — parent notified", "success");
+      toast.show("Student moved — parent & admin notified", "success");
       load();
     } catch (e: any) {
       toast.show(e.message, "error");
     }
   };
 
-  const activeBatch = trip ? batches.find((b) => b.id === trip.batch_id) : null;
+  const activeBatchId = trip ? trip.batch_id : selectedBatch;
+  const shownBatch = batches.find((b) => b.id === activeBatchId) || null;
 
   if (loading) {
     return (
@@ -199,21 +240,20 @@ export default function DriverDashboard() {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + spacing.md }]}>
         <View style={{ flex: 1 }}>
           <Text style={styles.hi}>Driver</Text>
           <Text style={styles.name}>{user?.name}</Text>
           <Text style={styles.vehicle}>{user?.vehicle_number}</Text>
         </View>
-        <Pressable testID="logout-button" onPress={logout} style={styles.iconBtn} hitSlop={10}>
+        <Pressable testID="logout-button" onPress={doLogout} style={styles.iconBtn} hitSlop={10}>
           <Ionicons name="log-out-outline" size={22} color={colors.onSurfaceSecondary} />
         </Pressable>
       </View>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}
+        contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxxl }}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -225,14 +265,21 @@ export default function DriverDashboard() {
           />
         }
       >
-        {/* Active trip control */}
         {trip ? (
+          /* ---------- ACTIVE TRIP ---------- */
           <View style={styles.tripCard} testID="active-trip-card">
             <View style={styles.tripTop}>
               <View style={[styles.statusDot, { backgroundColor: statusColor(trip.status) }]} />
               <Text style={styles.tripStatus}>{statusLabel(trip.status)}</Text>
             </View>
             <Text style={styles.tripBatch}>{trip.batch_name}</Text>
+
+            <View style={styles.liveBadge} testID="gps-live-badge">
+              <View style={styles.pulse} />
+              <Text style={styles.liveText}>Location is being shared automatically</Text>
+            </View>
+
+            <Text style={styles.helperLabel}>Update parents:</Text>
             <View style={styles.statusRow}>
               <StatusPill
                 label="On the Way"
@@ -247,10 +294,7 @@ export default function DriverDashboard() {
                 testID="status-reached"
               />
             </View>
-            <View style={styles.liveBadge}>
-              <View style={styles.pulse} />
-              <Text style={styles.liveText}>Sharing GPS every 10s</Text>
-            </View>
+
             <Button
               testID="end-trip-button"
               label="END TRIP"
@@ -263,75 +307,107 @@ export default function DriverDashboard() {
             />
           </View>
         ) : (
-          <View style={styles.idleCard} testID="idle-card">
-            <Ionicons name="bus-outline" size={40} color={colors.brand} />
-            <Text style={styles.idleTitle}>No active trip</Text>
-            <Text style={styles.idleSub}>Start a batch below to begin live tracking</Text>
+          /* ---------- PICK A BATCH ---------- */
+          <View>
+            <Text style={styles.bigHeading}>Tap a batch to start</Text>
+            <Text style={styles.subHeading}>Pick one, then press the big green button</Text>
+
+            {batches.length === 0 && <Text style={styles.emptyText}>No batches assigned yet.</Text>}
+
+            {batches.map((b, i) => {
+              const selected = selectedBatch === b.id;
+              const color = CARD_COLORS[i % CARD_COLORS.length];
+              return (
+                <Pressable
+                  key={b.id}
+                  testID={`batch-card-${b.id}`}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    setSelectedBatch(b.id);
+                  }}
+                  style={[styles.bigCard, selected && { borderColor: color, borderWidth: 3 }]}
+                >
+                  <View style={[styles.cardStripe, { backgroundColor: color }]} />
+                  <View style={[styles.cardIcon, { backgroundColor: color + "22" }]}>
+                    <Ionicons name="bus" size={28} color={color} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.bigCardName}>{b.name}</Text>
+                    <Text style={styles.bigCardMeta}>
+                      {b.students.length} students · {b.pickup_time}
+                    </Text>
+                    {b.unavailable && (
+                      <Text style={styles.unavailNote}>You marked this unavailable</Text>
+                    )}
+                  </View>
+                  <View style={[styles.check, selected && { backgroundColor: color, borderColor: color }]}>
+                    {selected && <Ionicons name="checkmark" size={20} color="#000" />}
+                  </View>
+                </Pressable>
+              );
+            })}
+
+            {batches.length > 0 && (
+              <>
+                <Button
+                  testID="start-trip-button"
+                  label={selectedBatch ? "START TRIP" : "SELECT A BATCH"}
+                  variant="success"
+                  large
+                  haptic="heavy"
+                  disabled={!selectedBatch}
+                  loading={acting}
+                  onPress={startTrip}
+                  style={{ marginTop: spacing.lg }}
+                />
+                <Pressable
+                  testID="mark-unavailable-button"
+                  disabled={!selectedBatch}
+                  onPress={() => {
+                    const b = batches.find((x) => x.id === selectedBatch) || null;
+                    setReason("");
+                    setUnavailFor(b);
+                  }}
+                  style={[styles.unavailBtn, !selectedBatch && { opacity: 0.4 }]}
+                >
+                  <Ionicons name="close-circle-outline" size={18} color={colors.error} />
+                  <Text style={styles.unavailBtnText}>I can&apos;t drive this batch</Text>
+                </Pressable>
+              </>
+            )}
           </View>
         )}
 
-        {/* Batches */}
-        <Text style={styles.sectionTitle}>My Batches</Text>
-        {batches.length === 0 && <Text style={styles.emptyText}>No batches assigned yet.</Text>}
-        {batches.map((b) => {
-          const isActive = trip?.batch_id === b.id;
-          return (
-            <View key={b.id} style={styles.batchCard} testID={`batch-${b.id}`}>
-              <View style={styles.batchHead}>
+        {/* ---------- STUDENTS OF THE ACTIVE/SELECTED BATCH ---------- */}
+        {shownBatch && (
+          <View style={styles.studentsBlock}>
+            <Text style={styles.sectionTitle}>Students · {shownBatch.name}</Text>
+            {shownBatch.students.length === 0 && <Text style={styles.emptyText}>No students in this batch.</Text>}
+            {shownBatch.students.map((s) => (
+              <View key={s.id} style={styles.studentRow} testID={`student-${s.id}`}>
+                <View style={styles.avatar}>
+                  <Text style={styles.avatarText}>{s.name.charAt(0)}</Text>
+                </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.batchName}>{b.name}</Text>
-                  <Text style={styles.batchMeta}>
-                    {b.school_name} · {b.pickup_time} · {b.students.length} students
+                  <Text style={[styles.studentName, s.absent_today && styles.absentName]}>{s.name}</Text>
+                  <Text style={styles.studentClass}>{s.class_grade}</Text>
+                </View>
+                <Pressable testID={`move-${s.id}`} onPress={() => setMoveStudent(s)} style={styles.moveBtn} hitSlop={8}>
+                  <Ionicons name="swap-horizontal" size={18} color={colors.onSurfaceSecondary} />
+                </Pressable>
+                <Pressable
+                  testID={`absent-${s.id}`}
+                  onPress={() => toggleAbsent(s)}
+                  style={[styles.absentBtn, s.absent_today && styles.absentBtnActive]}
+                >
+                  <Text style={[styles.absentBtnText, s.absent_today && { color: colors.onError }]}>
+                    {s.absent_today ? "Absent" : "Present"}
                   </Text>
-                </View>
-                {!trip && (
-                  <Button
-                    testID={`start-trip-${b.id}`}
-                    label="START"
-                    onPress={() => startTrip(b.id)}
-                    loading={acting}
-                    haptic="heavy"
-                    style={styles.startBtn}
-                  />
-                )}
-                {isActive && (
-                  <View style={styles.activeTag}>
-                    <Text style={styles.activeTagText}>LIVE</Text>
-                  </View>
-                )}
+                </Pressable>
               </View>
-
-              {b.students.map((s) => (
-                <View key={s.id} style={styles.studentRow} testID={`student-${s.id}`}>
-                  <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>{s.name.charAt(0)}</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.studentName, s.absent_today && styles.absentName]}>{s.name}</Text>
-                    <Text style={styles.studentClass}>{s.class_grade}</Text>
-                  </View>
-                  <Pressable
-                    testID={`move-${s.id}`}
-                    onPress={() => setMoveStudent(s)}
-                    style={styles.moveBtn}
-                    hitSlop={8}
-                  >
-                    <Ionicons name="swap-horizontal" size={18} color={colors.onSurfaceSecondary} />
-                  </Pressable>
-                  <Pressable
-                    testID={`absent-${s.id}`}
-                    onPress={() => toggleAbsent(s)}
-                    style={[styles.absentBtn, s.absent_today && styles.absentBtnActive]}
-                  >
-                    <Text style={[styles.absentBtnText, s.absent_today && { color: colors.onError }]}>
-                      {s.absent_today ? "Absent" : "Present"}
-                    </Text>
-                  </Pressable>
-                </View>
-              ))}
-            </View>
-          );
-        })}
+            ))}
+          </View>
+        )}
       </ScrollView>
 
       {/* Move student sheet */}
@@ -341,7 +417,7 @@ export default function DriverDashboard() {
         title={`Move ${moveStudent?.name || ""}`}
         testID="move-sheet"
       >
-        <Text style={styles.sheetHint}>Select a batch to move this student to. The parent will be notified.</Text>
+        <Text style={styles.sheetHint}>Pick the batch to move this student to. The parent and admin are notified.</Text>
         {batches.map((b) => {
           const current = moveStudent?.batch_id === b.id;
           return (
@@ -364,6 +440,44 @@ export default function DriverDashboard() {
             </Pressable>
           );
         })}
+      </Sheet>
+
+      {/* Unavailable reason sheet */}
+      <Sheet
+        visible={!!unavailFor}
+        onClose={() => setUnavailFor(null)}
+        title="Can't drive this batch?"
+        testID="unavailable-sheet"
+        footer={
+          <Button
+            label="SEND TO PARENTS & ADMIN"
+            variant="danger"
+            loading={acting}
+            onPress={submitUnavailable}
+            testID="submit-unavailable-button"
+          />
+        }
+      >
+        <Text style={styles.sheetHint}>
+          Tell us why. Everyone in <Text style={{ color: colors.onSurface }}>{unavailFor?.name}</Text> and the school admin
+          will get an instant alert.
+        </Text>
+        <TextInput
+          testID="unavailable-reason-input"
+          style={styles.reasonInput}
+          placeholder="e.g. Bus breakdown near market road"
+          placeholderTextColor={colors.onSurfaceSecondary}
+          value={reason}
+          onChangeText={setReason}
+          multiline
+        />
+        <View style={styles.quickReasons}>
+          {["Vehicle breakdown", "I am sick", "Traffic / road blocked", "Personal emergency"].map((r) => (
+            <Pressable key={r} testID={`quick-reason-${r}`} onPress={() => setReason(r)} style={styles.quickChip}>
+              <Text style={styles.quickChipText}>{r}</Text>
+            </Pressable>
+          ))}
+        </View>
       </Sheet>
     </View>
   );
@@ -393,15 +507,62 @@ const styles = StyleSheet.create({
   vehicle: { fontFamily: fonts.textMedium, fontSize: 13, color: colors.brand },
   iconBtn: { padding: spacing.sm, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md },
 
+  bigHeading: { fontFamily: fonts.displayBold, fontSize: 28, color: colors.onSurface, letterSpacing: 0.5 },
+  subHeading: { fontFamily: fonts.text, fontSize: 15, color: colors.onSurfaceSecondary, marginTop: spacing.xs, marginBottom: spacing.lg },
+
+  bigCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: "hidden",
+  },
+  cardStripe: { position: "absolute", left: 0, top: 0, bottom: 0, width: 6 },
+  cardIcon: { width: 56, height: 56, borderRadius: radius.md, alignItems: "center", justifyContent: "center", marginLeft: spacing.xs },
+  bigCardName: { fontFamily: fonts.displayBold, fontSize: 21, color: colors.onSurface },
+  bigCardMeta: { fontFamily: fonts.textMedium, fontSize: 14, color: colors.onSurfaceSecondary, marginTop: 2 },
+  unavailNote: { fontFamily: fonts.textMedium, fontSize: 12, color: colors.error, marginTop: 4 },
+  check: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  unavailBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.lg,
+    marginTop: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.error,
+  },
+  unavailBtnText: { fontFamily: fonts.textBold, fontSize: 15, color: colors.error },
+
   tripCard: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.lg, padding: spacing.lg, borderWidth: 1, borderColor: colors.border },
   tripTop: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   statusDot: { width: 10, height: 10, borderRadius: 5 },
   tripStatus: { fontFamily: fonts.textBold, fontSize: 14, color: colors.onSurface, letterSpacing: 0.5 },
-  tripBatch: { fontFamily: fonts.displayBold, fontSize: 26, color: colors.onSurface, marginTop: spacing.xs },
-  statusRow: { flexDirection: "row", gap: spacing.md, marginTop: spacing.lg },
+  tripBatch: { fontFamily: fonts.displayBold, fontSize: 28, color: colors.onSurface, marginTop: spacing.xs },
+  liveBadge: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.md, backgroundColor: "rgba(0,230,118,0.12)", borderRadius: radius.md, padding: spacing.md },
+  pulse: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.success },
+  liveText: { fontFamily: fonts.textMedium, fontSize: 13, color: colors.success },
+  helperLabel: { fontFamily: fonts.textMedium, fontSize: 13, color: colors.onSurfaceSecondary, marginTop: spacing.lg, marginBottom: spacing.sm },
+  statusRow: { flexDirection: "row", gap: spacing.md },
   pill: {
     flex: 1,
-    height: 48,
+    height: 56,
     borderRadius: radius.md,
     backgroundColor: colors.surfaceTertiary,
     alignItems: "center",
@@ -410,52 +571,33 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   pillActive: { backgroundColor: colors.brandTertiary, borderColor: colors.brand },
-  pillText: { fontFamily: fonts.textBold, fontSize: 14, color: colors.onSurfaceSecondary },
+  pillText: { fontFamily: fonts.textBold, fontSize: 15, color: colors.onSurfaceSecondary },
   pillTextActive: { color: colors.brand },
-  liveBadge: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.lg },
-  pulse: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success },
-  liveText: { fontFamily: fonts.textMedium, fontSize: 12, color: colors.onSurfaceSecondary },
 
-  idleCard: {
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.lg,
-    padding: spacing.xl,
-    alignItems: "center",
-    gap: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  idleTitle: { fontFamily: fonts.displayBold, fontSize: 20, color: colors.onSurface },
-  idleSub: { fontFamily: fonts.text, fontSize: 13, color: colors.onSurfaceSecondary, textAlign: "center" },
-
-  sectionTitle: { fontFamily: fonts.displayBold, fontSize: 18, color: colors.onSurface, marginTop: spacing.xl, marginBottom: spacing.md, letterSpacing: 0.5 },
+  studentsBlock: { marginTop: spacing.xl },
+  sectionTitle: { fontFamily: fonts.displayBold, fontSize: 18, color: colors.onSurface, marginBottom: spacing.md, letterSpacing: 0.5 },
   emptyText: { fontFamily: fonts.text, fontSize: 14, color: colors.onSurfaceSecondary },
-
-  batchCard: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.md, borderWidth: 1, borderColor: colors.border },
-  batchHead: { flexDirection: "row", alignItems: "center", marginBottom: spacing.sm },
-  batchName: { fontFamily: fonts.textBold, fontSize: 16, color: colors.onSurface },
-  batchMeta: { fontFamily: fonts.text, fontSize: 12, color: colors.onSurfaceSecondary, marginTop: 2 },
-  startBtn: { height: 44, paddingHorizontal: spacing.lg },
-  activeTag: { backgroundColor: colors.success, borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: 4 },
-  activeTagText: { fontFamily: fonts.textBold, fontSize: 11, color: colors.onSuccess, letterSpacing: 1 },
 
   studentRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
-    paddingVertical: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.divider,
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  avatar: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.surfaceTertiary, alignItems: "center", justifyContent: "center" },
-  avatarText: { fontFamily: fonts.displayBold, fontSize: 16, color: colors.brand },
-  studentName: { fontFamily: fonts.textMedium, fontSize: 15, color: colors.onSurface },
+  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceTertiary, alignItems: "center", justifyContent: "center" },
+  avatarText: { fontFamily: fonts.displayBold, fontSize: 17, color: colors.brand },
+  studentName: { fontFamily: fonts.textBold, fontSize: 16, color: colors.onSurface },
   absentName: { textDecorationLine: "line-through", color: colors.onSurfaceSecondary },
   studentClass: { fontFamily: fonts.text, fontSize: 12, color: colors.onSurfaceSecondary },
-  moveBtn: { width: 38, height: 38, borderRadius: radius.md, backgroundColor: colors.surfaceTertiary, alignItems: "center", justifyContent: "center" },
+  moveBtn: { width: 42, height: 42, borderRadius: radius.md, backgroundColor: colors.surfaceTertiary, alignItems: "center", justifyContent: "center" },
   absentBtn: {
-    minWidth: 74,
-    height: 38,
+    minWidth: 84,
+    height: 42,
     borderRadius: radius.md,
     backgroundColor: colors.surfaceTertiary,
     alignItems: "center",
@@ -463,9 +605,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
   },
   absentBtnActive: { backgroundColor: colors.error },
-  absentBtnText: { fontFamily: fonts.textBold, fontSize: 13, color: colors.onSurface },
+  absentBtnText: { fontFamily: fonts.textBold, fontSize: 14, color: colors.onSurface },
 
-  sheetHint: { fontFamily: fonts.text, fontSize: 13, color: colors.onSurfaceSecondary, marginBottom: spacing.md },
+  sheetHint: { fontFamily: fonts.text, fontSize: 14, color: colors.onSurfaceSecondary, marginBottom: spacing.md, lineHeight: 20 },
   moveOption: {
     flexDirection: "row",
     alignItems: "center",
@@ -475,7 +617,23 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   moveOptionCurrent: { opacity: 0.55 },
-  moveOptionName: { fontFamily: fonts.textBold, fontSize: 15, color: colors.onSurface },
+  moveOptionName: { fontFamily: fonts.textBold, fontSize: 16, color: colors.onSurface },
   moveOptionMeta: { fontFamily: fonts.text, fontSize: 12, color: colors.onSurfaceSecondary, marginTop: 2 },
   currentTag: { fontFamily: fonts.textMedium, fontSize: 12, color: colors.onSurfaceSecondary },
+
+  reasonInput: {
+    backgroundColor: colors.surfaceTertiary,
+    borderRadius: radius.md,
+    minHeight: 90,
+    padding: spacing.lg,
+    fontFamily: fonts.textMedium,
+    fontSize: 16,
+    color: colors.onSurface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    textAlignVertical: "top",
+  },
+  quickReasons: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.md },
+  quickChip: { backgroundColor: colors.surfaceTertiary, borderRadius: radius.pill, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderWidth: 1, borderColor: colors.border },
+  quickChipText: { fontFamily: fonts.textMedium, fontSize: 13, color: colors.onSurface },
 });
