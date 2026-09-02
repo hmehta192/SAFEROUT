@@ -8,6 +8,7 @@ import random
 import uuid
 import math
 import time
+import asyncio
 import jwt
 from pathlib import Path
 from pydantic import BaseModel
@@ -106,6 +107,7 @@ class BatchBody(BaseModel):
 class StudentBody(BaseModel):
     name: str
     class_grade: Optional[str] = ""
+    section: Optional[str] = "A"
     parent_id: str
     batch_id: str
     plan: Optional[str] = "monthly"
@@ -211,9 +213,11 @@ def student_public(s: dict) -> dict:
         "id": s["id"],
         "name": s["name"],
         "class_grade": s.get("class_grade", ""),
+        "section": s.get("section", ""),
         "parent_id": s.get("parent_id"),
         "batch_id": s.get("batch_id"),
         "absent_today": s.get("absent_today", False),
+        "updated_at": s.get("updated_at", s.get("created_at")),
     }
 
 
@@ -388,7 +392,7 @@ async def mark_absent(student_id: str, body: AbsentBody, user: dict = Depends(re
     student = await db.students.find_one({"id": student_id, "deleted_at": None})
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    await db.students.update_one({"id": student_id}, {"$set": {"absent_today": body.absent}})
+    await db.students.update_one({"id": student_id}, {"$set": {"absent_today": body.absent, "updated_at": now_iso()}})
     if body.absent:
         await create_alert(student["parent_id"], "absent", "Marked Absent",
                           f"{student['name']} has been marked absent for today's trip.")
@@ -410,7 +414,7 @@ async def move_student(student_id: str, body: MoveBody, user: dict = Depends(req
     batch = await db.batches.find_one({"id": body.batch_id, "deleted_at": None})
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
-    await db.students.update_one({"id": student_id}, {"$set": {"batch_id": body.batch_id}})
+    await db.students.update_one({"id": student_id}, {"$set": {"batch_id": body.batch_id, "updated_at": now_iso()}})
     await create_alert(student["parent_id"], "batch_change", "Batch Changed",
                       f"{student['name']} has been moved to {batch['name']}.")
     await notify(await admin_ids(), "batch_change", "Batch Changed",
@@ -459,7 +463,10 @@ async def parent_trips(user: dict = Depends(require_role("parent"))):
         result.append({
             "student_id": s["id"],
             "student_name": s["name"],
+            "class_grade": s.get("class_grade", ""),
+            "section": s.get("section", ""),
             "absent_today": s.get("absent_today", False),
+            "updated_at": s.get("updated_at", s.get("created_at")),
             "batch_id": batch["id"] if batch else None,
             "batch_name": batch["name"] if batch else None,
             "batch_unavailable": batch.get("unavailable", False) if batch else False,
@@ -510,16 +517,40 @@ async def admin_overview(user: dict = Depends(require_role("admin"))):
     active_trips = []
     for t in active:
         driver = await db.users.find_one({"id": t["driver_id"]}, {"_id": 0})
+        roster = await db.students.find({"batch_id": t["batch_id"], "deleted_at": None}, {"_id": 0}).to_list(200)
+        on_board = [s for s in roster if not s.get("absent_today")]
         active_trips.append({
             **t,
             "driver_name": driver["name"] if driver else "-",
             "vehicle_number": driver.get("vehicle_number") if driver else "-",
+            "students_on_board": len(on_board),
+            "total_students": len(roster),
+            "students": [
+                {"name": s["name"], "class_grade": s.get("class_grade", ""),
+                 "section": s.get("section", ""), "absent": s.get("absent_today", False)}
+                for s in roster
+            ],
         })
     active_subs = await db.students.count_documents({"deleted_at": None, "subscription.status": "active"})
+
+    absent_docs = await db.students.find({"deleted_at": None, "absent_today": True}, {"_id": 0}).to_list(500)
+    absent_students = []
+    for s in absent_docs:
+        b = await db.batches.find_one({"id": s.get("batch_id")}, {"_id": 0})
+        absent_students.append({
+            "id": s["id"],
+            "name": s["name"],
+            "class_grade": s.get("class_grade", ""),
+            "section": s.get("section", ""),
+            "batch_name": b["name"] if b else "-",
+            "updated_at": s.get("updated_at", s.get("created_at")),
+        })
+
     return {
         "counts": {"drivers": drivers, "parents": parents, "students": students,
                    "active_trips": len(active_trips), "active_subscriptions": active_subs},
         "active_trips": active_trips,
+        "absent_students": absent_students,
     }
 
 
@@ -598,10 +629,10 @@ async def add_student(body: StudentBody, user: dict = Depends(require_role("admi
         raise HTTPException(status_code=404, detail="Parent not found")
     if not await db.batches.find_one({"id": body.batch_id, "deleted_at": None}):
         raise HTTPException(status_code=404, detail="Batch not found")
-    doc = {"id": new_id(), "name": body.name, "class_grade": body.class_grade,
+    doc = {"id": new_id(), "name": body.name, "class_grade": body.class_grade, "section": body.section,
            "parent_id": body.parent_id, "batch_id": body.batch_id,
            "absent_today": False, "subscription": build_subscription(body.plan),
-           "created_at": now_iso(), "deleted_at": None}
+           "updated_at": now_iso(), "created_at": now_iso(), "deleted_at": None}
     await db.students.insert_one(doc)
     doc.pop("_id", None)
     return doc
@@ -614,7 +645,7 @@ async def update_student(student_id: str, body: MoveBody, user: dict = Depends(r
     student = await db.students.find_one({"id": student_id, "deleted_at": None})
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    await db.students.update_one({"id": student_id}, {"$set": {"batch_id": body.batch_id}})
+    await db.students.update_one({"id": student_id}, {"$set": {"batch_id": body.batch_id, "updated_at": now_iso()}})
     batch = await db.batches.find_one({"id": body.batch_id})
     await create_alert(student["parent_id"], "batch_change", "Batch Changed",
                       f"{student['name']} has been moved to {batch['name']}.")
@@ -697,6 +728,33 @@ async def seed_data():
 
 
 app.include_router(api_router)
+
+
+async def simulate_movement():
+    # Drives active-trip markers so the admin/parent maps show live movement,
+    # even when no physical driver device is posting GPS.
+    while True:
+        await asyncio.sleep(6)
+        try:
+            trips = await db.trips.find({"status": {"$ne": "ended"}}).to_list(100)
+            for t in trips:
+                lat = t.get("current_lat")
+                lng = t.get("current_lng")
+                if lat is None or lng is None:
+                    lat, lng = 30.7333, 76.7794
+                lat += (random.random() - 0.35) * 0.0013
+                lng += (random.random() - 0.35) * 0.0013
+                upd = {"current_lat": lat, "current_lng": lng, "updated_at": now_iso()}
+                if t.get("status") == "started":
+                    upd["status"] = "on_the_way"
+                await db.trips.update_one({"id": t["id"]}, {"$set": upd})
+        except Exception as e:
+            logger.warning(f"simulate_movement error: {e}")
+
+
+@app.on_event("startup")
+async def start_simulator():
+    asyncio.create_task(simulate_movement())
 
 app.add_middleware(
     CORSMiddleware,

@@ -17,9 +17,28 @@ import { useAuth } from "@/src/auth";
 import { useToast } from "@/src/components/Toast";
 import Button from "@/src/components/Button";
 import Sheet from "@/src/components/Sheet";
+import LiveMap from "@/src/components/LiveMap";
 import { colors, fonts, radius, spacing, statusColor, statusLabel } from "@/src/theme";
 
 const TABS = ["Overview", "Drivers", "Parents", "Students", "Batches", "Subscriptions"];
+
+const fmtTime = (iso?: string) => {
+  if (!iso) return "--";
+  try {
+    return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return "--";
+  }
+};
+const fmtDateTime = (iso?: string) => {
+  if (!iso) return "--";
+  try {
+    const d = new Date(iso);
+    return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  } catch {
+    return "--";
+  }
+};
 
 export default function AdminDashboard() {
   const insets = useSafeAreaInsets();
@@ -81,7 +100,7 @@ export default function AdminDashboard() {
   }, [load, user]);
 
   const openSheet = (type: any, target?: any) => {
-    setForm(target?.subscription ? { plan: target.subscription.plan, status: target.subscription.status } : { plan: "monthly", status: "active" });
+    setForm(target?.subscription ? { plan: target.subscription.plan, status: target.subscription.status } : { plan: "monthly", status: "active", section: "A" });
     setSubTarget(target || null);
     setSheet(type);
   };
@@ -148,6 +167,24 @@ export default function AdminDashboard() {
   const alertIcon = (t: string) =>
     t === "absent" ? "person-remove" : t === "batch_change" ? "swap-horizontal" : t === "driver_unavailable" ? "warning" : "bus";
 
+  const activeTrips = overview?.active_trips || [];
+  const absentStudents = overview?.absent_students || [];
+  const mapMarkers = activeTrips
+    .filter((t: any) => t.current_lat != null && t.current_lng != null)
+    .map((t: any) => ({
+      lat: t.current_lat,
+      lng: t.current_lng,
+      title: `${(t.driver_name || "").split(" ")[0]} · ${t.students_on_board} on board`,
+      subtitle: t.batch_name,
+    }));
+  const firstMarker = mapMarkers[0];
+  const mapRegion = {
+    latitude: firstMarker?.lat ?? 30.7333,
+    longitude: firstMarker?.lng ?? 76.7794,
+    latitudeDelta: 0.06,
+    longitudeDelta: 0.06,
+  };
+
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -202,19 +239,76 @@ export default function AdminDashboard() {
               <Metric label="Active Subs" value={c.active_subscriptions} accent={colors.brand} icon="card" />
             </View>
 
-            <Text style={styles.sectionTitle}>Live Trips</Text>
-            {(!overview?.active_trips || overview.active_trips.length === 0) && (
-              <Text style={styles.empty}>No active trips right now.</Text>
-            )}
-            {overview?.active_trips?.map((t: any) => (
-              <View key={t.id} style={styles.card} testID={`active-trip-${t.id}`}>
+            {/* Live map of all active drivers */}
+            <View style={styles.liveHeaderRow}>
+              <Text style={styles.sectionTitle}>Live Fleet Map</Text>
+              <View style={styles.autoPill}>
+                <View style={styles.autoDot} />
+                <Text style={styles.autoText}>Auto-updating</Text>
+              </View>
+            </View>
+            <View style={styles.mapCard} testID="admin-live-map">
+              <LiveMap region={mapRegion} markers={mapMarkers} />
+            </View>
+
+            {/* Detailed active trips */}
+            <Text style={styles.sectionTitle}>On Trip Right Now</Text>
+            {activeTrips.length === 0 && <Text style={styles.empty}>No active trips right now.</Text>}
+            {activeTrips.map((t: any) => (
+              <View key={t.id} style={styles.tripBigCard} testID={`active-trip-${t.id}`}>
                 <View style={styles.rowBetween}>
-                  <Text style={styles.cardTitle}>{t.batch_name}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.tripDriver}>{t.driver_name}</Text>
+                    <Text style={styles.cardMeta}>{t.vehicle_number} · {t.batch_name}</Text>
+                  </View>
                   <View style={[styles.statusChip, { backgroundColor: statusColor(t.status) + "22" }]}>
+                    <View style={[styles.statusDotSmall, { backgroundColor: statusColor(t.status) }]} />
                     <Text style={[styles.statusChipText, { color: statusColor(t.status) }]}>{statusLabel(t.status)}</Text>
                   </View>
                 </View>
-                <Text style={styles.cardMeta}>{t.driver_name} · {t.vehicle_number}</Text>
+
+                <View style={styles.tripStats}>
+                  <View style={styles.tripStat}>
+                    <Text style={styles.tripStatValue}>{t.students_on_board}<Text style={styles.tripStatOf}>/{t.total_students}</Text></Text>
+                    <Text style={styles.tripStatLabel}>On board</Text>
+                  </View>
+                  <View style={styles.tripStatDivider} />
+                  <View style={styles.tripStat}>
+                    <Text style={styles.tripStatValue}>{fmtTime(t.started_at)}</Text>
+                    <Text style={styles.tripStatLabel}>Started</Text>
+                  </View>
+                  <View style={styles.tripStatDivider} />
+                  <View style={styles.tripStat}>
+                    <Text style={styles.tripStatValue}>{fmtTime(t.updated_at)}</Text>
+                    <Text style={styles.tripStatLabel}>Last update</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.rosterLabel}>Students on board</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rosterRow}>
+                  {t.students.filter((s: any) => !s.absent).map((s: any, idx: number) => (
+                    <View key={idx} style={styles.rosterChip}>
+                      <Text style={styles.rosterName}>{s.name}</Text>
+                      <Text style={styles.rosterMeta}>Class {s.class_grade} · {s.section}</Text>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            ))}
+
+            {/* Absent today */}
+            <Text style={styles.sectionTitle}>Absent Today ({absentStudents.length})</Text>
+            {absentStudents.length === 0 && <Text style={styles.empty}>No students absent today.</Text>}
+            {absentStudents.map((s: any) => (
+              <View key={s.id} style={styles.absentRow} testID={`absent-student-${s.id}`}>
+                <View style={styles.absentIcon}>
+                  <Ionicons name="person-remove" size={16} color={colors.error} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>{s.name}</Text>
+                  <Text style={styles.cardMeta}>Class {s.class_grade} · Section {s.section} · {s.batch_name}</Text>
+                  <Text style={styles.updatedText}>Marked at {fmtDateTime(s.updated_at)}</Text>
+                </View>
               </View>
             ))}
           </View>
@@ -259,7 +353,8 @@ export default function AdminDashboard() {
               <EntityRow
                 key={s.id}
                 title={s.name}
-                subtitle={`${s.class_grade} · ${s.batch_name} · Parent: ${s.parent_name}`}
+                subtitle={`Class ${s.class_grade} · Section ${s.section} · ${s.batch_name}`}
+                detail={`Parent: ${s.parent_name} · Updated ${fmtDateTime(s.updated_at)}`}
                 icon="school"
                 onDelete={() => del("student", s.id)}
                 testID={`student-${s.id}`}
@@ -360,6 +455,12 @@ export default function AdminDashboard() {
             <Field label="Student Name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} testID="f-name" />
             <Field label="Class / Grade" value={form.class_grade} onChange={(v) => setForm({ ...form, class_grade: v })} testID="f-class" />
             <Selector
+              label="Section"
+              options={[{ id: "A", label: "Section A" }, { id: "B", label: "Section B" }]}
+              value={form.section}
+              onSelect={(id) => setForm({ ...form, section: id })}
+            />
+            <Selector
               label="Parent"
               options={parents.map((p) => ({ id: p.id, label: `${p.name} (${p.phone})` }))}
               value={form.parent_id}
@@ -437,7 +538,7 @@ function AddBtn({ label, onPress, testID }: any) {
   );
 }
 
-function EntityRow({ title, subtitle, icon, onDelete, testID }: any) {
+function EntityRow({ title, subtitle, detail, icon, onDelete, testID }: any) {
   return (
     <View style={styles.entityRow} testID={testID}>
       <View style={styles.entityIcon}>
@@ -446,6 +547,7 @@ function EntityRow({ title, subtitle, icon, onDelete, testID }: any) {
       <View style={{ flex: 1 }}>
         <Text style={styles.cardTitle}>{title}</Text>
         <Text style={styles.cardMeta}>{subtitle}</Text>
+        {!!detail && <Text style={styles.updatedText}>{detail}</Text>}
       </View>
       <Pressable testID={`${testID}-delete`} onPress={onDelete} hitSlop={8} style={styles.delBtn}>
         <Ionicons name="trash-outline" size={18} color={colors.error} />
@@ -531,6 +633,31 @@ const styles = StyleSheet.create({
 
   sectionTitle: { fontFamily: fonts.displayBold, fontSize: 18, color: colors.onSurface, marginTop: spacing.xl, marginBottom: spacing.md },
   empty: { fontFamily: fonts.text, fontSize: 14, color: colors.onSurfaceSecondary },
+
+  liveHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.xl },
+  autoPill: { flexDirection: "row", alignItems: "center", gap: spacing.xs, backgroundColor: "rgba(0,230,118,0.14)", borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 4 },
+  autoDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.success },
+  autoText: { fontFamily: fonts.textBold, fontSize: 11, color: colors.success },
+  mapCard: { height: 240, borderRadius: radius.lg, overflow: "hidden", borderWidth: 1, borderColor: colors.border, marginTop: spacing.md },
+
+  tripBigCard: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.lg, padding: spacing.lg, marginBottom: spacing.md, borderWidth: 1, borderColor: colors.border },
+  tripDriver: { fontFamily: fonts.displayBold, fontSize: 20, color: colors.onSurface },
+  statusDotSmall: { width: 7, height: 7, borderRadius: 4 },
+  tripStats: { flexDirection: "row", alignItems: "center", backgroundColor: colors.surfaceTertiary, borderRadius: radius.md, paddingVertical: spacing.md, marginTop: spacing.md },
+  tripStat: { flex: 1, alignItems: "center" },
+  tripStatValue: { fontFamily: fonts.displayBold, fontSize: 20, color: colors.onSurface },
+  tripStatOf: { fontFamily: fonts.displayMedium, fontSize: 14, color: colors.onSurfaceSecondary },
+  tripStatLabel: { fontFamily: fonts.text, fontSize: 11, color: colors.onSurfaceSecondary, marginTop: 2 },
+  tripStatDivider: { width: 1, height: 32, backgroundColor: colors.border },
+  rosterLabel: { fontFamily: fonts.textMedium, fontSize: 12, color: colors.onSurfaceSecondary, marginTop: spacing.md, marginBottom: spacing.sm },
+  rosterRow: { gap: spacing.sm, paddingRight: spacing.md },
+  rosterChip: { backgroundColor: colors.surfaceTertiary, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderWidth: 1, borderColor: colors.border, minWidth: 120 },
+  rosterName: { fontFamily: fonts.textBold, fontSize: 13, color: colors.onSurface },
+  rosterMeta: { fontFamily: fonts.text, fontSize: 11, color: colors.onSurfaceSecondary, marginTop: 2 },
+
+  absentRow: { flexDirection: "row", gap: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm, borderWidth: 1, borderColor: colors.border },
+  absentIcon: { width: 36, height: 36, borderRadius: radius.md, backgroundColor: "rgba(255,61,0,0.15)", alignItems: "center", justifyContent: "center" },
+  updatedText: { fontFamily: fonts.text, fontSize: 11, color: colors.onSurfaceSecondary, marginTop: 4, opacity: 0.8 },
 
   card: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, padding: spacing.lg, marginBottom: spacing.md, borderWidth: 1, borderColor: colors.border },
   cardTitle: { fontFamily: fonts.textBold, fontSize: 16, color: colors.onSurface },

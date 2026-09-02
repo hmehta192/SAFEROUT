@@ -21,6 +21,9 @@ type Trip = {
 type TripInfo = {
   student_id: string;
   student_name: string;
+  class_grade: string;
+  section: string;
+  updated_at: string;
   absent_today: boolean;
   batch_name: string;
   batch_unavailable: boolean;
@@ -177,6 +180,9 @@ export default function ParentTracking() {
           <View style={styles.panelHead}>
             <View style={{ flex: 1 }}>
               <Text style={styles.childName}>{current?.student_name}</Text>
+              <Text style={styles.childClass}>
+                Class {current?.class_grade} · Section {current?.section} · {current?.batch_name}
+              </Text>
               <Text style={styles.childMeta}>
                 {current?.driver_name} · {current?.vehicle_number}
               </Text>
@@ -371,6 +377,7 @@ const styles = StyleSheet.create({
   panelHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.borderStrong, alignSelf: "center", marginBottom: spacing.md },
   panelHead: { flexDirection: "row", alignItems: "center", marginBottom: spacing.md },
   childName: { fontFamily: fonts.displayBold, fontSize: 24, color: colors.onSurface },
+  childClass: { fontFamily: fonts.textMedium, fontSize: 13, color: colors.brand, marginTop: 2 },
   childMeta: { fontFamily: fonts.textMedium, fontSize: 13, color: colors.onSurfaceSecondary, marginTop: 2 },
   statusChip: { flexDirection: "row", alignItems: "center", gap: spacing.xs, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   statusDot: { width: 8, height: 8, borderRadius: 4 },

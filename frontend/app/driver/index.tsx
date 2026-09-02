@@ -23,7 +23,7 @@ import Button from "@/src/components/Button";
 import Sheet from "@/src/components/Sheet";
 import { colors, fonts, radius, spacing, statusColor, statusLabel } from "@/src/theme";
 
-type Student = { id: string; name: string; class_grade: string; batch_id: string; absent_today: boolean };
+type Student = { id: string; name: string; class_grade: string; section?: string; batch_id: string; absent_today: boolean; updated_at?: string };
 type Batch = {
   id: string;
   name: string;
@@ -390,7 +390,14 @@ export default function DriverDashboard() {
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.studentName, s.absent_today && styles.absentName]}>{s.name}</Text>
-                  <Text style={styles.studentClass}>{s.class_grade}</Text>
+                  <Text style={styles.studentClass}>
+                    Class {s.class_grade} · Sec {s.section} · {shownBatch.name}
+                  </Text>
+                  {!!s.updated_at && (
+                    <Text style={styles.studentUpdated}>
+                      Updated {new Date(s.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </Text>
+                  )}
                 </View>
                 <Pressable testID={`move-${s.id}`} onPress={() => setMoveStudent(s)} style={styles.moveBtn} hitSlop={8}>
                   <Ionicons name="swap-horizontal" size={18} color={colors.onSurfaceSecondary} />
@@ -594,6 +601,7 @@ const styles = StyleSheet.create({
   studentName: { fontFamily: fonts.textBold, fontSize: 16, color: colors.onSurface },
   absentName: { textDecorationLine: "line-through", color: colors.onSurfaceSecondary },
   studentClass: { fontFamily: fonts.text, fontSize: 12, color: colors.onSurfaceSecondary },
+  studentUpdated: { fontFamily: fonts.text, fontSize: 11, color: colors.onSurfaceSecondary, opacity: 0.7, marginTop: 2 },
   moveBtn: { width: 42, height: 42, borderRadius: radius.md, backgroundColor: colors.surfaceTertiary, alignItems: "center", justifyContent: "center" },
   absentBtn: {
     minWidth: 84,

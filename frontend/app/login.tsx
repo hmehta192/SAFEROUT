@@ -13,9 +13,9 @@ import Button from "@/src/components/Button";
 import { colors, fonts, radius, spacing } from "@/src/theme";
 
 const DEMO = [
-  { label: "Admin", phone: "+919000000001", icon: "shield-checkmark" },
-  { label: "Driver", phone: "+919000000002", icon: "bus" },
-  { label: "Parent", phone: "+919000000003", icon: "people" },
+  { label: "Admin", phone: "+919811100001", icon: "shield-checkmark" },
+  { label: "Driver", phone: "+919812300001", icon: "bus" },
+  { label: "Parent", phone: "+918810000003", icon: "people" },
 ];
 
 export default function Login() {

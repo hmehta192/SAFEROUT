@@ -1,9 +1,9 @@
 import React from "react";
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, View, Text } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from "react-native-maps";
-import { colors } from "@/src/theme";
+import { colors, fonts } from "@/src/theme";
 
-export type MapMarker = { lat: number; lng: number; title?: string };
+export type MapMarker = { lat: number; lng: number; title?: string; subtitle?: string };
 
 const darkStyle = [
   { elementType: "geometry", stylers: [{ color: "#1d2026" }] },
@@ -34,9 +34,24 @@ export default function LiveMap({
         toolbarEnabled={false}
       >
         {markers.map((m, i) => (
-          <Marker key={i} coordinate={{ latitude: m.lat, longitude: m.lng }} title={m.title}>
-            <View style={styles.busPin}>
-              <View style={styles.busDot} />
+          <Marker
+            key={i}
+            coordinate={{ latitude: m.lat, longitude: m.lng }}
+            title={m.title}
+            description={m.subtitle}
+            anchor={{ x: 0.5, y: 1 }}
+          >
+            <View style={styles.pinWrap}>
+              {!!m.title && (
+                <View style={styles.label}>
+                  <Text style={styles.labelText} numberOfLines={1}>
+                    {m.title}
+                  </Text>
+                </View>
+              )}
+              <View style={styles.busPin}>
+                <View style={styles.busDot} />
+              </View>
             </View>
           </Marker>
         ))}
@@ -47,6 +62,16 @@ export default function LiveMap({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
+  pinWrap: { alignItems: "center" },
+  label: {
+    backgroundColor: colors.surfaceInverse,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginBottom: 3,
+    maxWidth: 160,
+  },
+  labelText: { fontFamily: fonts.textBold, fontSize: 11, color: colors.onSurfaceInverse },
   busPin: {
     width: 34,
     height: 34,
